@@ -1,6 +1,6 @@
 {
   "name": "gulp-better-rollup2",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "gulp-better-rollup fork ",
   "main": "index.js",
   "scripts": {
