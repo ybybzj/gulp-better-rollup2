@@ -14,14 +14,6 @@ var PLUGIN_NAME = 'gulp-better-rollup';
 // map object storing rollup cache objects for each input file
 var rollupCache = new Map;
 
-function parseBundles(arg) {
-	if (typeof arg == 'string')
-		return [{format: arg}];
-	if (arg instanceof Array)
-		return arg;
-	return [arg];
-}
-
 // transformer class
 class GulpRollup extends Transform {
 
@@ -33,15 +25,20 @@ class GulpRollup extends Transform {
 		// cannot handle streams
 		if (file.isStream())
 			return cb(new PluginError(PLUGIN_NAME, 'Streaming not supported'));
+	
+		let filePath = path.relative(file.cwd,file.path);
 
-		var rollupOptions, bundleList;
-		if (this.arg2) {
-			rollupOptions = Object.assign({}, this.arg1);
-			bundleList = parseBundles(this.arg2);
-		} else {
-			rollupOptions = {};
-			bundleList = parseBundles(this.arg1);
-		}
+		var rollupOptions, bundleOption, fileConfig;
+		let {
+			input,
+			output,
+			fileConfigs = {}
+		} = this.options || {};
+
+		fileConfig = fileConfigs[filePath] || {};
+		rollupOptions = Object.assign({}, input, fileConfig.input);
+		bundleOption = Object.assign({}, output, fileConfig.output);
+		
 
 		// user should not specify the input file path, but let him if he insists for some reason
 		if (rollupOptions.input === undefined)
@@ -62,9 +59,10 @@ class GulpRollup extends Transform {
 		var originalCwd = file.cwd;
 		var originalPath = file.path;
 		var moduleName = camelCase(path.basename(file.path, path.extname(file.path)));
-
+		
 		function generateAndApplyBundle(bundle, generateOptions, targetFile) {
-			generateOptions = extend({}, generateOptions);
+			let moduleConfig;
+			generateOptions = Object.assign({}, generateOptions);
 			// Sugaring the API by copying convinience objects and properties from rollupOptions
 			// to generateOptions (if not defined)
 			if (generateOptions.file === undefined)
@@ -81,11 +79,11 @@ class GulpRollup extends Transform {
 			// But it won't say anything either, leaving a space for confusion
 			if (generateOptions.name === undefined)
 				generateOptions.name = rollupOptions.name || moduleName;
-			// if (generateOptions.moduleId === undefined)
-			// 	generateOptions.moduleId = generateOptions.moduleName
+
 			generateOptions.sourcemap = createSourceMap;
 			// generate bundle according to given or autocompleted options
-			// var result = bundle.generate(generateOptions);
+			// console.log("------generateOptions------");
+			// console.log(generateOptions);
 			return bundle.generate(generateOptions).then((result)=>{
 				if (createSourceMap) {
 					result.map.file = path.relative(originalCwd, originalPath);
@@ -101,48 +99,32 @@ class GulpRollup extends Transform {
 			// destination (and custom name) was given, possibly multiple output bundles.
 			
 		}
-		var createBundle = (bundle, generateOptions, injectNewFile) => {
+
+		var createBundle = (bundle, generateOptions) => {
 			// custom output name might be set
 			if (generateOptions.file) {
 				// setup filename name from generateOptions.dest
 				var newFileName = path.basename(generateOptions.file);
 				var newFilePath = path.join(file.base, newFileName);
-				if (injectNewFile) {
-					// create new file and inject it into stream if needed (in case of multiple outputs)
-					var newFile = new File({
-						cwd: file.cwd,
-						base: file.base,
-						path: newFilePath,
-						stat: {
-							isFile: () => true,
-							isDirectory: () => false,
-							isBlockDevice: () => false,
-							isCharacterDevice: () => false,
-							isSymbolicLink: () => false,
-							isFIFO: () => false,
-							isSocket: () => false
-						}
-					});
-					return generateAndApplyBundle(bundle, generateOptions, newFile).then(()=>{
-						this.push(newFile);
-					});
-
-				} else {
 					// rename original file
-					file.path = newFilePath;
-					return generateAndApplyBundle(bundle, generateOptions, file);
-				}
-			} else {
-				// file wasnt renamed nor new one was created,
-				// apply data and sourcemaps to the original file
-				return generateAndApplyBundle(bundle, generateOptions, file);
-			}
+				file.path = newFilePath;
+			} 
+
+			return generateAndApplyBundle(bundle, generateOptions, file);
+			
 		};
 
 
 		// custom rollup can be provided inside the config object
 		rollup = rollupOptions.rollup || rollup;
 		delete rollupOptions.rollup;
+
+		// console.log('------filePath----->', filePath);
+		// console.log("------rollupOptions------");
+		// console.log(rollupOptions);
+		// console.log("------bundleOption------");
+		// console.log(bundleOption);
+
 		rollup
 			// pass basic options to rollup
 			.rollup(rollupOptions)
@@ -151,11 +133,8 @@ class GulpRollup extends Transform {
 				// cache rollup object if caching is enabled
 				if (rollupOptions.cache !== false)
 					rollupCache.set(rollupOptions.input, bundle);
-				// generate ouput according to (each of) given generateOptions
-				each(createBundle, bundleList.map((generateOptions, i)=> [bundle, generateOptions, i]))
-				// Promise.all(bundleList.map((generateOptions, i) => createBundle(bundle, generateOptions, i)))
+				return createBundle(bundle, bundleOption)
 				.then(()=>{
-
 					cb(null, file);
 				});
 				// pass file to gulp and end stream
@@ -173,37 +152,11 @@ class GulpRollup extends Transform {
 }
 
 // first argument (rollupOptions) is optional
-module.exports = function factory(arg1, arg2) {
+module.exports = function factory(options) {
 	// instantiate the stream class
 	var stream = new GulpRollup({objectMode: true});
 	// pass in options objects
-	stream.arg1 = arg1;
-	stream.arg2 = arg2;
+	stream.options = options;
 	// return the stream instance
 	return stream;
 };
-
-function each(f,args){
-	return args.reduce((p, arg)=>{
-		return p.then(f.apply(null, arg));
-	}, Promise.resolve());
-}
-
-function extend(){
-	var sources = [].slice.call(arguments).filter((o)=>(Object(o) === o)), i = 1, l = sources.length;
-	if(l < 1){
-		return {};
-	}
-	var target = sources[0];
-
-	while(i < l){
-		let s = sources[i];
-		for(let k in s){
-			if(s.hasOwnProperty(k)){
-				target[k] = s[k];
-			}
-		}
-		i += 1;
-	}
-	return target;
-}
